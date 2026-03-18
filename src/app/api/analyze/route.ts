@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchUser, fetchItems } from "@/lib/hn-api";
 import { analyzeUser } from "@/lib/analyzer";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const username = request.nextUrl.searchParams.get("username");
   if (!username) {
