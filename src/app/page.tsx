@@ -13,11 +13,22 @@ export default function Home() {
     inputRef.current?.focus();
   }, []);
 
+  const navigate = (name: string, deep: boolean) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const prefix = deep ? "/deep" : "/user";
+    router.push(`${prefix}/${encodeURIComponent(trimmed)}`);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = username.trim();
-    if (trimmed) {
-      router.push(`/user/${encodeURIComponent(trimmed)}`);
+    navigate(username, false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault();
+      navigate(username, true);
     }
   };
 
@@ -65,6 +76,7 @@ export default function Home() {
                   onChange={(e) => setUsername(e.target.value)}
                   onFocus={() => setIsFocused(true)}
                   onBlur={() => setIsFocused(false)}
+                  onKeyDown={handleKeyDown}
                   placeholder="enter_username"
                   className="flex-1 bg-transparent outline-none text-foreground text-sm placeholder:text-border"
                   autoComplete="off"
@@ -77,8 +89,17 @@ export default function Home() {
             </div>
           </form>
 
-          <div className="flex items-center justify-center gap-4 mt-4 text-xs text-muted">
-            <span>press <kbd className="bg-surface-2 px-1.5 py-0.5 rounded border border-border text-foreground">Enter</kbd> to analyze</span>
+          <div className="flex items-center justify-center gap-6 mt-4 text-xs text-muted">
+            <span>
+              <kbd className="bg-surface-2 px-1.5 py-0.5 rounded border border-border text-foreground">Enter</kbd>
+              {" "}quick profile
+            </span>
+            <span className="text-border">|</span>
+            <span>
+              <kbd className="bg-surface-2 px-1.5 py-0.5 rounded border border-hn-orange/30 text-hn-orange">Shift+Enter</kbd>
+              {" "}deep analytics
+              <span className="text-hn-orange ml-1 text-[10px]">DuckDB</span>
+            </span>
           </div>
         </div>
 
@@ -89,7 +110,7 @@ export default function Home() {
             {["pg", "dang", "patio11", "tptacek", "jacquesm"].map((name) => (
               <button
                 key={name}
-                onClick={() => router.push(`/user/${name}`)}
+                onClick={() => navigate(name, false)}
                 className="text-xs bg-surface border border-border px-3 py-1.5 rounded hover:border-accent hover:text-accent transition-all duration-200"
               >
                 {name}
@@ -101,11 +122,9 @@ export default function Home() {
         {/* Footer info */}
         <div className="fade-in fade-in-delay-3 text-center space-y-2">
           <div className="flex items-center justify-center gap-4 text-xs text-border">
-            <span>analyzes up to 200 recent items</span>
+            <span>quick: 200 items via HN API</span>
             <span>&#183;</span>
-            <span>uses official HN API</span>
-            <span>&#183;</span>
-            <span>no data stored</span>
+            <span>deep: full history via DuckDB + HuggingFace</span>
           </div>
         </div>
       </div>
