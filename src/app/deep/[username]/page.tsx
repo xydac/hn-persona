@@ -232,30 +232,12 @@ function BestStoryCard({ data }: { data: BestStoryResult }) {
   );
 }
 
-// --- Card state wrapper ---
+// --- Card state ---
 
 type CardState<T> = { status: "loading" } | { status: "done"; data: T } | { status: "error"; error: string };
 
-function useDeepQuery<T>(
-  queryFn: () => Promise<T>,
-  deps: unknown[],
-): CardState<T> {
-  const [state, setState] = useState<CardState<T>>({ status: "loading" });
-
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "loading" });
-
-    queryFn()
-      .then((data) => { if (!cancelled) setState({ status: "done", data }); })
-      .catch((e) => { if (!cancelled) setState({ status: "error", error: e?.message || "Query failed" }); });
-
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-
-  return state;
-}
+// Yield to browser so React can paint between state updates
+const yieldToBrowser = () => new Promise<void>((r) => setTimeout(r, 0));
 
 // --- Main page ---
 
@@ -263,29 +245,72 @@ export default function DeepPage({ params }: { params: Promise<{ username: strin
   const { username: rawUsername } = use(params);
   const username = decodeURIComponent(rawUsername);
 
-  const [ready, setReady] = useState(false);
-  const [initError, setInitError] = useState<string | null>(null);
+  const [initState, setInitState] = useState<"loading" | "ready" | "error">("loading");
+  const [initError, setInitError] = useState("");
   const [sources, setSources] = useState<{ src: string; recentSrc: string } | null>(null);
 
-  // Initialize DuckDB and build source strings
+  const [stats, setStats] = useState<CardState<StatsResult>>({ status: "loading" });
+  const [percentile, setPercentile] = useState<CardState<PercentileResult>>({ status: "loading" });
+  const [monthly, setMonthly] = useState<CardState<MonthlyResult>>({ status: "loading" });
+  const [activity, setActivity] = useState<CardState<ActivityResult>>({ status: "loading" });
+  const [words, setWords] = useState<CardState<WordsResult>>({ status: "loading" });
+  const [network, setNetwork] = useState<CardState<NetworkResult>>({ status: "loading" });
+  const [depth, setDepth] = useState<CardState<DepthResult>>({ status: "loading" });
+  const [bestStory, setBestStory] = useState<CardState<BestStoryResult>>({ status: "loading" });
+
+  // Sequential query pipeline — each card appears as its query finishes
+  const runPipeline = useCallback(async (user: string, src: string, recentSrc: string) => {
+    const mod = await import("@/lib/duckdb");
+
+    // Helper: run a query, update state, yield to browser for re-render
+    async function run<T>(
+      fn: () => Promise<T>,
+      setter: (s: CardState<T>) => void,
+    ) {
+      try {
+        const data = await fn();
+        setter({ status: "done", data });
+      } catch (e) {
+        setter({ status: "error", error: e instanceof Error ? e.message : "Query failed" });
+      }
+      await yieldToBrowser();
+    }
+
+    // Run queries one by one — each card pops in after its query
+    await run(() => mod.queryStats(user, src), setStats);
+    await run(() => mod.queryMonthly(user, src), setMonthly);
+    await run(() => mod.queryActivity(user, src), setActivity);
+    await run(() => mod.queryPercentile(user, recentSrc), setPercentile);
+    await run(() => mod.queryWords(user, src), setWords);
+    await run(() => mod.queryNetwork(user, recentSrc), setNetwork);
+    await run(() => mod.queryDepth(user, recentSrc), setDepth);
+    await run(() => mod.queryBestStory(user, src), setBestStory);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const mod = await import("@/lib/duckdb");
-        await mod.getDB(); // warm up
+        await mod.getDB();
         if (cancelled) return;
         const srcs = mod.getSourceStrings(6);
         setSources({ src: srcs.src, recentSrc: srcs.recentSrc });
-        setReady(true);
+        setInitState("ready");
+
+        // Start query pipeline
+        await runPipeline(username, srcs.src, srcs.recentSrc);
       } catch (e) {
-        if (!cancelled) setInitError(e instanceof Error ? e.message : "Failed to initialize DuckDB");
+        if (!cancelled) {
+          setInitError(e instanceof Error ? e.message : "Failed to initialize");
+          setInitState("error");
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [username, runPipeline]);
 
-  if (initError) {
+  if (initState === "error") {
     return (
       <main className="min-h-screen flex items-center justify-center px-4">
         <div className="w-full max-w-lg bg-surface border border-red-900/50 rounded-lg p-6">
@@ -299,7 +324,7 @@ export default function DeepPage({ params }: { params: Promise<{ username: strin
     );
   }
 
-  if (!ready || !sources) {
+  if (initState === "loading" || !sources) {
     return (
       <main className="min-h-screen flex items-center justify-center px-4">
         <div className="w-full max-w-lg bg-surface border border-border rounded-lg p-6">
@@ -320,61 +345,8 @@ export default function DeepPage({ params }: { params: Promise<{ username: strin
     );
   }
 
-  return <DeepDashboard username={username} rawUsername={rawUsername} src={sources.src} recentSrc={sources.recentSrc} />;
-}
-
-function DeepDashboard({ username, rawUsername, src, recentSrc }: {
-  username: string; rawUsername: string; src: string; recentSrc: string;
-}) {
-  // All queries launch in parallel as soon as DuckDB is ready
-  const statsLoader = useCallback(async () => {
-    const { queryStats } = await import("@/lib/duckdb");
-    return queryStats(username, src);
-  }, [username, src]);
-
-  const monthlyLoader = useCallback(async () => {
-    const { queryMonthly } = await import("@/lib/duckdb");
-    return queryMonthly(username, src);
-  }, [username, src]);
-
-  const activityLoader = useCallback(async () => {
-    const { queryActivity } = await import("@/lib/duckdb");
-    return queryActivity(username, src);
-  }, [username, src]);
-
-  const wordsLoader = useCallback(async () => {
-    const { queryWords } = await import("@/lib/duckdb");
-    return queryWords(username, src);
-  }, [username, src]);
-
-  const networkLoader = useCallback(async () => {
-    const { queryNetwork } = await import("@/lib/duckdb");
-    return queryNetwork(username, recentSrc);
-  }, [username, recentSrc]);
-
-  const depthLoader = useCallback(async () => {
-    const { queryDepth } = await import("@/lib/duckdb");
-    return queryDepth(username, recentSrc);
-  }, [username, recentSrc]);
-
-  const bestStoryLoader = useCallback(async () => {
-    const { queryBestStory } = await import("@/lib/duckdb");
-    return queryBestStory(username, src);
-  }, [username, src]);
-
-  const percentileLoader = useCallback(async () => {
-    const { queryPercentile } = await import("@/lib/duckdb");
-    return queryPercentile(username, recentSrc);
-  }, [username, recentSrc]);
-
-  const stats = useDeepQuery(statsLoader, [username]);
-  const monthly = useDeepQuery(monthlyLoader, [username]);
-  const activity = useDeepQuery(activityLoader, [username]);
-  const words = useDeepQuery(wordsLoader, [username]);
-  const network = useDeepQuery(networkLoader, [username]);
-  const depth = useDeepQuery(depthLoader, [username]);
-  const bestStory = useDeepQuery(bestStoryLoader, [username]);
-  const percentile = useDeepQuery(percentileLoader, [username]);
+  const completedCount = [stats, percentile, monthly, activity, words, network, depth, bestStory]
+    .filter((s) => s.status !== "loading").length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -389,7 +361,7 @@ function DeepDashboard({ username, rawUsername, src, recentSrc }: {
           </Link>
           <div className="flex items-center gap-3 text-xs">
             <span className="bg-hn-orange/10 text-hn-orange px-2 py-0.5 rounded border border-hn-orange/20">DuckDB WASM</span>
-            <span className="text-muted">6 months &middot; HuggingFace parquet</span>
+            <span className="text-muted">{completedCount}/8 queries &middot; 6 months</span>
           </div>
         </div>
       </header>
@@ -402,7 +374,9 @@ function DeepDashboard({ username, rawUsername, src, recentSrc }: {
               <h1 className="text-3xl font-bold">{username}</h1>
               <span className="text-xs bg-accent/10 text-accent px-2 py-0.5 rounded border border-accent/20">deep analysis</span>
             </div>
-            <div className="text-xs text-muted">Queries running in parallel via DuckDB WASM</div>
+            <div className="text-xs text-muted">
+              {completedCount < 8 ? "Loading cards sequentially..." : "All queries complete"}
+            </div>
           </div>
           <Link href={`/user/${rawUsername}`} className="text-xs text-muted hover:text-accent transition-colors">
             &larr; quick profile
